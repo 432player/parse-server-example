@@ -878,10 +878,16 @@ Parse.Cloud.define('createAndAttachStudioToUsers', function(request, response) {
             console.log("Found..." + users.length);
             var count = 0;
             for (var i = 0; i < users.length; i++) {
-                var studio = Parse.Object.extend("Studio");
+                var NewStudio = Parse.Object.extend("Studio");
+                var studio = new NewStudio();
                 var firstName = users[i].get("first_name");
                 var lastName = users[i].get("last_name");
                 var fullName = firstName + " " + lastName;
+                
+//                 var owner = new Parse.User({
+//                     id: users[i].id
+//                 });
+                studio.set("title", fullName);
                 studio.set("owner", users[i]);
                 newStudioArray[count] = studio;
                 count++;
