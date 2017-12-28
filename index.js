@@ -1,6 +1,3 @@
-// Example express application adding the parse-server module to expose Parse
-// compatible API routes.
-// import OneSignalPushAdapter from __dirname + '/adapters/OneSignalPushAdapter';
 
 var express = require('express');
 var ParseServer = require('parse-server').ParseServer;
@@ -12,14 +9,14 @@ if (!databaseUri) {
 }
 
 //Mailgun - reset password
-var simpleMailgunAdapter = require('parse-server/lib/Adapters/Email/SimpleMailgunAdapter')({
-  apiKey: process.env.MAILGUN_KEY || '',
-  domain: process.env.DOMAIN || 'medidatewith.me',
-  fromAddress: process.env.MAILGUN_FROM_ADDRESS || 'no-reply@medidatewith.me'
-});
+// var simpleMailgunAdapter = require('parse-server/lib/Adapters/Email/SimpleMailgunAdapter')({
+//   apiKey: process.env.MAILGUN_KEY || '',
+//   domain: process.env.DOMAIN || 'medidatewith.me',
+//   fromAddress: process.env.MAILGUN_FROM_ADDRESS || 'no-reply@medidatewith.me'
+// });
 
 //Push Adapter
-var OneSignalPushAdapter = require('parse-server/lib/Adapters/Push/OneSignalPushAdapter');
+var OneSignalPushAdapter = require('parse-server-onesignal-push-adapter');
 var oneSignalPushAdapter = new OneSignalPushAdapter({
   oneSignalAppId:process.env.ONE_SIGNAL_APP_ID,
   oneSignalApiKey:process.env.ONE_SIGNAL_REST_API_KEY
@@ -29,25 +26,26 @@ var api = new ParseServer({
   databaseURI: databaseUri || 'mongodb://localhost:27017/dev',
   cloud: __dirname + '/cloud/main.js',
   appId: process.env.APP_ID || 'myAppId',
-  appName: 'Medidate',
+  appName: 'Medidate Sandbox',
   masterKey: process.env.MASTER_KEY || '', //Add your master key here. Keep it secret!
   serverURL: process.env.SERVER_URL || process.env.ALT_SERVER_URL,  // Don't forget to change to https if needed
   publicServerURL: process.env.PUBLIC_SERVER_URL || process.env.ALT_PUBLIC_SERVER_URL,
+  liveQuery: {
+    classNames: ["Message"] // List of classes to support for query subscriptions
+  },
   verifyUserEmails: true,
-  emailAdapter: simpleMailgunAdapter,
+  emailAdapter: {
+      module: 'parse-server-simple-mailgun-adapter',
+      options: {
+      fromAddress: process.env.MAILGUN_FROM_ADDRESS || 'no-reply@medidatewith.me',
+      apiKey: process.env.MAILGUN_KEY || '',
+      domain: process.env.DOMAIN || 'medidatewith.me',
+      }
+      },
   push: {
      adapter: oneSignalPushAdapter
-  },
-//    customPages: {
-//      invalidLink: process.env.HOST_URL + 'invalid_link.html',
-//      verifyEmailSuccess: process.env.HOST_URL + 'verify_email_success.html',
-//      choosePassword: process.env.HOST_URL + 'choose_password.html',
-//      passwordResetSuccess: process.env.HOST_URL + 'password_reset_success.html'
-//    }
+  }
 });
-// Client-keys like the javascript key or the .NET key are not necessary with parse-server
-// If you wish you require them, you can set them as options in the initialization above:
-// javascriptKey, restAPIKey, dotNetKey, clientKey
 
 var app = express();
 
@@ -61,6 +59,13 @@ app.get('/', function(req, res) {
 });
 
 var port = process.env.PORT || 1337;
-app.listen(port, function() {
+var httpServer = require('http').createServer(app);
+httpServer.listen(port, function() {
     console.log('parse-server-example running on port ' + port + '.');
 });
+// app.listen(port, function() {
+//     console.log('parse-server-example running on port ' + port + '.');
+// });
+
+// This will enable the Live Query real-time server
+ParseServer.createLiveQueryServer(httpServer);
