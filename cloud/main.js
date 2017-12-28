@@ -1,3 +1,254 @@
+// Parse.Cloud.beforeSave(Parse.Installation, function(request, response) {
+//     //Parse.Cloud.useMasterKey();
+//     var androidId = request.object.get("androidId");
+//     if (androidId == null || androidId == "") {
+//         console.warn("No androidId found, save and exit");
+//         response.success();
+//     }
+//     var query = new Parse.Query(Parse.Installation);
+//     query.equalTo("androidId", androidId);
+//     query.addAscending("createdAt");
+//     query.find({useMasterKey: true}).then(function(results) {
+//         for (var i = 0; i < results.length; ++i) {
+//             console.warn("iterating over Installations with androidId= "+ androidId);
+//             if (results[i].get("installationId") != request.object.get("installationId")) {
+//                 console.warn("Installation["+i+"] and the request have different installationId values. Try to delete. [installationId:" + results[i].get("installationId") + "]");
+//                 results[i].destroy().then(function() {
+//                     console.warn("Installation["+i+"] has been deleted");
+//                 },
+//                 function() {
+//                     console.warn("Error: Installation["+i+"] could not be deleted");
+//                 });
+//             } else {
+//                 console.warn("Installation["+i+"] and the request has the same installationId value. Ignore. [installationId:" + results[i].get("installationId") + "]");
+//             }
+//         }
+//         console.warn("Finished iterating over Installations. A new Installation will be saved now...");
+//         response.success();
+//     },
+//     function(error) {
+//         response.error("Error: Can't query for Installation objects.");
+//     });
+// });
+Parse.Cloud.define('sendAlertToSessionSubscribers', function(request, response) {
+    // request has 2 parameters: params passed by the client and the authorized user
+    var params = request.params;
+    var user = request.user;
+
+    //Parsing Json for iOS Platforms
+    var alert = "Reminder - ";
+    var push_titleFutureDate = "Tomorrow, ";
+    var push_titleTodayDate = "Today";
+    var push_titleTime = " at ";
+    var push_type = 1;
+    var message_object_id = "";
+    var push_notification_id = -1;
+
+    var dictUsersToSessions = {};
+    var dictJsonToSessions = {};
+    //     var promiseArray = [];
+
+    var monthNames = [
+        "Jan", "Feb", "Mar",
+        "Apr", "May", "Jun", "Jul",
+        "Aug", "Sep", "Oct",
+        "Nov", "Dec"
+    ];
+
+    console.log("#### Send alert notifications to users who asked for it");
+
+    //Filter only users with thier ids in it
+    var alertQuery = new Parse.Query("Alert");
+    alertQuery.include("session")
+    alertQuery.equalTo("notified", false);
+    alertQuery.find({
+        success: function(alerts) {
+            if (alerts.length == 0) {
+                response.success('No aLerts to notify..');
+            }
+
+            var alertsClone = alerts.slice(0);
+            console.log("Found Alerts - " + alerts.length);
+            for (var i = 0; i < alerts.length; i++) {
+                var date1 = new Date();
+                var date2 = new Date(alerts[i].get("session").get("date").getTime());
+                
+                var daysDiff = dateDiffInDays(date1, date2);
+                console.log("#### difference between session and now - " + daysDiff);
+                if (daysDiff > 1) {
+                    continue;
+                }
+
+                var keysOfDictUsersToSessions = Object.keys(dictUsersToSessions);
+                var sessionId = alerts[i].get("session").id;
+                var indexOfSessionId = keysOfDictUsersToSessions.indexOf(sessionId);
+                console.log("#### Index of sessionId - " + indexOfSessionId);
+                if (indexOfSessionId >= 0) {
+                    continue;
+                }
+
+                var userIdsWithThatSession = [];
+                var count = 0;
+                for (var j = 0; j < alertsClone.length; j++) {
+                    if (sessionId == alertsClone[j].get("session").id) {
+                        userIdsWithThatSession[count] = alertsClone[j].get("user").id;
+                        count++;
+                        console.log("#### Session Id of Session with Related Users " + sessionId);
+                        console.log("#### User Id of User Related to Session " + alertsClone[j].get("user").id);
+                    }
+                }
+                alerts[i].set("notified", true);
+                dictUsersToSessions[String(sessionId)] = userIdsWithThatSession;
+                console.log("#### Session Id of Session in Alert " + sessionId);
+                console.log("#### User Ids of Related Users " + userIdsWithThatSession.length);
+
+                var date = alerts[i].get("session").get("date");
+                var day = date.getDate();
+                var monthIndex = date.getMonth();
+                var year = date.getFullYear();
+                var hours = date.getHours();
+                var minutes = date.getMinutes();
+
+                var pushTitle;
+                if (sameDay(date1, date2)) {
+                    console.log("#### day is today");
+                    pushTitle = push_titleTodayDate +
+                        push_titleTime + minTwoDigits(hours) + ":" + minTwoDigits(minutes);
+                } else {
+                    console.log("#### day is tomorrow");
+                    pushTitle = push_titleFutureDate + day + ' ' + monthNames[monthIndex] + ' ' + year +
+                        push_titleTime + minTwoDigits(hours) + ":" + minTwoDigits(minutes);
+                }
+
+                var pushAlert = alert + alerts[i].get("session").get("title");
+
+                var customJsonOfSession = {
+                    alert: pushAlert,
+                    session_alert: pushAlert,
+                    push_title: pushTitle,
+                    push_type: push_type,
+                    message_object_id: message_object_id,
+                    push_notification_id: push_notification_id,
+                    push_object_id: sessionId,
+                    push_badge: "Increment"
+                };
+
+                var jsonOfSession = {
+                    alert: pushAlert,
+                    session_alert: pushAlert,
+                    push_title: pushTitle,
+                    push_type: push_type,
+                    headings: {
+                        en: pushTitle,
+                    },
+                    message_object_id: message_object_id,
+                    push_notification_id: push_notification_id,
+                    push_object_id: sessionId,
+                    badge: 1,
+                    custom: customJsonOfSession
+                };
+                dictJsonToSessions[String(sessionId)] = jsonOfSession;
+                console.log("#### Session Json " + jsonOfSession);
+
+                var userQuery = new Parse.Query(Parse.User);
+                userQuery.containedIn("objectId", dictUsersToSessions[String(sessionId)]);
+
+                var pushQuery = new Parse.Query(Parse.Installation);
+                pushQuery.matchesQuery('user', userQuery);
+
+                //                 var promise = new Parse.Promise();
+                //                 Parse.Push.send({
+                //                     where: pushQuery,
+                //                     data: dictJsonToSessions[String(sessionId)]
+                //                 }, {
+                //                     useMasterKey: true,
+                //                     success: function() {
+                //                         console.log("#### PUSH OK");
+                //                     },
+                //                     error: function(error) {
+                //                         console.log("#### PUSH ERROR" + error.message);
+                //                     }
+                //                 }).then(function(result) {
+                //                     //Marks this promise as fulfilled, 
+                //                     //firing any callbacks waiting on it.
+                //                     promise.resolve(result);
+                //                 }, function(error) {
+                //                     //Marks this promise as fulfilled, 
+                //                     //firing any callbacks waiting on it.
+                //                     promise.reject(error);
+                //                 });
+                //                 promiseArray.push(promise);
+                //             }
+                Parse.Push.send({
+                    where: pushQuery,
+                    data: dictJsonToSessions[String(sessionId)]
+                }, {
+                    useMasterKey: true,
+                    success: function() {
+                        console.log("#### PUSH OK");
+                    },
+                    error: function(error) {
+                        console.log("#### PUSH ERROR" + error.message);
+                    }
+                });
+            }
+
+            //             Parse.Promise.when(promiseArray).then(function(result) {
+            //                 console.log("success promise!!")
+            //                 Parse.Object.saveAll(alerts, {
+            //                     useMasterKey: true,
+            //                     success: function(list) {
+            //                         console.log("#### Alerts Saved");
+            //                         status.success("success promise!!");
+            //                         response.success('Alerts Saved');
+            //                     },
+            //                     error: function(error) {
+            //                         console.log("wasnt able to save Alert Objects Table because  " + error.code);
+            //                         response.error('wasnt able to save Alert Objects Table');
+            //                     }
+            //                 });
+            //             }, function(error) {
+            //                 console.error("Promise Error: " + error.message);
+            //                 status.error(error);
+            //             });
+
+            Parse.Object.saveAll(alerts, {
+                useMasterKey: true,
+                success: function(list) {
+                    console.log("#### Alerts Saved");
+                    status.success("success promise!!");
+                    response.success('Alerts Saved');
+                },
+                error: function(error) {
+                    console.log("wasnt able to save Alert Objects Table because  " + error.code);
+                    response.error('wasnt able to save Alert Objects Table');
+                }
+            });
+
+        },
+        error: function(error) {
+            response.error(error);
+        },
+    });
+    
+    function minTwoDigits(n) {
+      return (n < 10 ? '0' : '') + n;
+    }
+    
+    function dateDiffInDays(date1, date2) {
+        var timeDiff = Math.abs(date2.getTime() - date1.getTime());
+        var diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
+
+        return diffDays;
+    }
+
+    function sameDay(d1, d2) {
+        return d1.getUTCFullYear() == d2.getUTCFullYear() &&
+            d1.getUTCMonth() == d2.getUTCMonth() &&
+            d1.getUTCDate() == d2.getUTCDate();
+    }
+});
+
 Parse.Cloud.define('removeTeacherFromStudio', function(request, response) {
 
     var params = request.params;
@@ -12,6 +263,7 @@ Parse.Cloud.define('removeTeacherFromStudio', function(request, response) {
     relation.remove(teacher);
 
     studio.save(null, {
+        useMasterKey: true,
         success: function() {
             response.success("Teacher was removed from studio");
         },
@@ -34,6 +286,7 @@ Parse.Cloud.define('addStudentToRequestedUserRelation', function(request, respon
     relation.add(student);
 
     teacher.save(null, {
+        useMasterKey: true,
         success: function() {
             response.success("Student was saved to relation");
         },
@@ -56,6 +309,7 @@ Parse.Cloud.define('addMessageToUserRelationMessages', function(request, respons
     relation.add(message);
 
     chatOwner.save(null, {
+        useMasterKey: true,
         success: function() {
             response.success("Message was saved to relation");
         },
@@ -141,8 +395,12 @@ Parse.Cloud.define('pushChannelMedidate', function(request, response) {
             console.log("#### session_location_invitation_push");
             break;
         case 14:
-            //pushQuery.equalTo("session_location_invitation_push", true);
+            //             pushQuery.equalTo("session_location_invitation_push", true);
             console.log("#### session_location_invitation_push");
+            break;
+        case 15:
+            pushQuery.equalTo("user_looking_for_partner_push", true);
+            console.log("#### user_looking_for_partner_push");
             break;
         default:
             pushQuery.equalTo("session_changed_push", true);
@@ -169,20 +427,20 @@ Parse.Cloud.define('pushChannelMedidate', function(request, response) {
             custom: custom
         }
     }, {
+        useMasterKey: true,
         success: function() {
             console.log("#### PUSH OK");
         },
         error: function(error) {
             console.log("#### PUSH ERROR" + error.message);
         },
-        useMasterKey: true
     });
 
     response.success('success');
 });
 
 Parse.Cloud.define('saveAndroidUserDeviceToken', function(request, response) {
-    Parse.Cloud.useMasterKey();
+    //     Parse.Cloud.useMasterKey();
     var params = request.params;
     var user = request.user;
     var token = params.token; //GCM TOKEN
@@ -193,11 +451,13 @@ Parse.Cloud.define('saveAndroidUserDeviceToken', function(request, response) {
     var installationQuery = new Parse.Query(Parse.Installation);
     installationQuery.equalTo('objectId', installation[0]);
     installationQuery.find({
+        useMasterKey: true,
         success: function(installations) {
             console.log("#### Successfully retrieved Installation" + installations.length);
             var userInstallation = installations[0];
             userInstallation.set("deviceToken", token);
             userInstallation.save(null, {
+                useMasterKey: true,
                 success: function(listing) {
                     console.log("#### Saved Token");
                     response.success('success');
@@ -211,12 +471,12 @@ Parse.Cloud.define('saveAndroidUserDeviceToken', function(request, response) {
         error: function(error) {
             console.log("#### Error: " + error.code + " " + error.message);
             response.error(error);
-        }
+        },
     });
 });
 
 Parse.Cloud.define('saveUserRate', function(request, response) {
-    Parse.Cloud.useMasterKey();
+    //     Parse.Cloud.useMasterKey();
 
     var params = request.params;
     var userId = params.userId;
@@ -227,23 +487,27 @@ Parse.Cloud.define('saveUserRate', function(request, response) {
     var query = new Parse.Query(Parse.User);
     query.equalTo('objectId', userId);
     query.first({
+        useMasterKey: true,
         success: function(object) {
             object.set("rate", rate);
-            object.save();
+            object.save(null, {
+                useMasterKey: true
+            });
             response.success("Success");
         },
         error: function(error) {
             alert("Error: " + error.code + " " + error.message);
             response.error("Error");
-        }
+        },
     });
 });
 
 Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
-    Parse.Cloud.useMasterKey();
+    //     Parse.Cloud.useMasterKey();
 
     var newRecurringSessionsArray = [];
-    var dictNewAndEdited = {}; // create an empty dictionary for use in planSession replacepent
+    var dictNewAndEditedPlan = {}; // create an empty dictionary for use in planSession and alert replacepent
+    var dictNewAndEditedAlert = {}; // create an empty dictionary for use in alert replacepent
     var excludeMinusOccurences = [0, -1, -2, -3];
     var then = new Date();
     then.setHours(then.getHours() - 1);
@@ -253,58 +517,68 @@ Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
     pushQuery.notContainedIn("occurrence", excludeMinusOccurences);
     pushQuery.limit(1000);
     pushQuery.find({
+        useMasterKey: true,
         success: function(results) {
-            console.log("#### Sessions to Reoccurre " + results.length);
+            //console.log("#### Sessions to Reoccurre " + results.length);
 
             //var sum = 0;
             for (var i = 0; i < results.length; ++i) {
+                console.log("Entered Loop");
                 var newSession = results[i].clone();
+                console.log("Cloned Session for Editing");
                 newSession.set("attenders_count", 0);
                 var dailyDaysArray = newSession.get("session_occurrence_days");
+                if (dailyDaysArray != null) {
+                    console.log("dailyDaysArray - " + dailyDaysArray.length);
+                } else {
+                    console.log("No dailyDaysArray");
+                }
 
                 var date = new Date(newSession.get("date").getTime());
                 var previousDate = new Date(newSession.get("date").getTime());
-		console.log("Old Date - " + previousDate);
-		    
+                console.log("Got Old Date - " + previousDate);
+
                 switch (newSession.get("occurrence")) {
                     case 1:
                         do {
-                            if (dailyDaysArray !== null && dailyDaysArray !== undefined && dailyDaysArray[0] !== 0) {
+                            if (dailyDaysArray != null && dailyDaysArray != undefined && dailyDaysArray[0] !== 0) {
                                 console.log("This Daily has sessions days and   " + dailyDaysArray);
                                 do {
                                     date.setDate(date.getDate() + 1);
-//                                     date.setHours(previousDate.getHours());
-//                                     date.setMinutes(previousDate.getMinutes());
+                                    console.log("Got Old Date Hours - " + previousDate.getHours());
+                                    console.log("Got Old Date Minutes - " + previousDate.getMinutes());
+                                    date.setHours(previousDate.getHours());
+                                    date.setMinutes(previousDate.getMinutes());
                                     var dayNumber = date.getDay() + 1;
                                     console.log("does day exists:   " + dailyDaysArray.indexOf(dayNumber));
                                 } while (dailyDaysArray.indexOf(dayNumber) === -1)
                             } else {
                                 console.log("NO DAYS DEFINED OR WEEKLY");
                                 date.setDate(date.getDate() + 1);
-//                              	date.setHours(previousDate.getHours());
-//                              	date.setMinutes(previousDate.getMinutes());
+                                date.setHours(previousDate.getHours());
+                                date.setMinutes(previousDate.getMinutes());
                             }
                             //date.setDate(previousDate.getDate() + 1);
                         } while (date <= then);
-			console.log("New Date - " + date);
+                        console.log("New Date - " + date);
                         break;
 
                     case 2:
                         do {
                             //  date.setHours(previousDate.getHours() + 7 * 24);
                             date.setDate(date.getDate() + 7);
-// 			    date.setHours(previousDate.getHours());
-// 			    date.setMinutes(previousDate.getMinutes());
+                            date.setHours(previousDate.getHours());
+                            date.setMinutes(previousDate.getMinutes());
                         } while (date <= then);
-			console.log("New Date - " + date);
+                        console.log("New Date - " + date);
                         break;
 
                     case 3:
                         //  date.setHours(previousDate.getHours() + 4 * 7 * 24);
-                        date.addMonths(1);			    
-// 			date.setHours(previousDate.getHours());
-// 			date.setMinutes(previousDate.getMinutes());
-			console.log("New Date - " + date);
+                        date.addMonths(1);
+                        date.setHours(previousDate.getHours());
+                        date.setMinutes(previousDate.getMinutes());
+                        console.log("New Date - " + date);
                         break;
                     default:
                         ;
@@ -314,65 +588,186 @@ Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
                 results[i].set("occurrence", -1 * results[i].get("occurrence"));
 
                 newRecurringSessionsArray.push(newSession);
+                console.log("Changed a Session - " + i);
             }
             if (newRecurringSessionsArray.length > 0 && results.length > 0) {
+                console.log("Try to save all - " + newRecurringSessionsArray.length);
                 Parse.Object.saveAll(newRecurringSessionsArray, {
+                    useMasterKey: true,
                     success: function(newSessionList) {
+                        console.log("Saved newRecurringSessionsArray");
                         Parse.Object.saveAll(results, {
+                            useMasterKey: true,
                             success: function(editedSessionList) {
-				console.log("#### Saving New Recurring Sessions Array  " + newRecurringSessionsArray.length);
+                                console.log("#### Saving New Recurring Sessions Array  " + newRecurringSessionsArray.length);
                                 console.log("#### Saving Edited Recurring Sessions Array  " + results.length);
-								
+
                                 var planSessionQuery = new Parse.Query("PlanSessionRelation");
                                 planSessionQuery.containedIn("session", results);
-								planSessionQuery.include("session");
+                                planSessionQuery.include("session");
                                 planSessionQuery.limit(1000);
                                 planSessionQuery.find({
+                                    useMasterKey: true,
                                     success: function(planSessions) {
-					if(planSessions != null && planSessions.length > 0){
+                                        if (planSessions != null && planSessions.length > 0) {
+                                            for (var i = 0; i < results.length; i++) {
+                                                var newSessionForPlan = newRecurringSessionsArray[i];
+                                                var editedSessionObjectId = results[i].id;
+                                                console.log("#### Add Element to Dictionary - " + editedSessionObjectId);
+                                                console.log("#### Title of new session - " + newSessionForPlan.get("title"));
+                                                console.log("#### Id of new session - " + newSessionForPlan.id);
+                                                dictNewAndEditedPlan[String(editedSessionObjectId)] = newSessionForPlan;
+                                            }
+                                            console.log("#### Succesfully created dictionary...");
 
-						for (var i = 0; i < results.length; i++) {
-							var newSessionForPlan = newRecurringSessionsArray[i];
-							var editedSessionObjectId = results[i].id;
-							console.log("#### Add Element to Dictionary - " + editedSessionObjectId);
-							console.log("#### Title of new session - " + newSessionForPlan.get("title"));
-							console.log("#### Id of new session - " + newSessionForPlan.id);
-							dictNewAndEdited[String(editedSessionObjectId)] = newSessionForPlan;
-						}
-						console.log("#### Succesfully created dictionary...");
+                                            console.log("#### Plan Sessions Array  " + planSessions.length);
+                                            for (var i = 0; i < planSessions.length; i++) {
+                                                var sessionToBeReplaced = new Parse.Object({
+                                                    id: planSessions[i].get("session").id
+                                                });
+                                                var sessionToBeReplacedObjectId = sessionToBeReplaced.id;
+                                                console.log("#### Session ObjectId to be replaced in plan - " + sessionToBeReplacedObjectId);
 
-						console.log("#### Plan Sessions Array  " + planSessions.length);
-						for (var i = 0; i < planSessions.length; i++) {
-							var sessionToBeReplaced = new Parse.Object({
-								id: planSessions[i].get("session").id
-							});
-							var sessionToBeReplacedObjectId = sessionToBeReplaced.id;
-							console.log("#### Session ObjectId to be replaced in plan - " + sessionToBeReplacedObjectId);
+                                                var sessionToReplaceObject = dictNewAndEditedPlan[String(sessionToBeReplacedObjectId)];
+                                                console.log("#### Session ObjectId to replace in plan - " + sessionToReplaceObject.id);
 
-							var sessionToReplaceObject = dictNewAndEdited[String(sessionToBeReplacedObjectId)];
-							console.log("#### Session ObjectId to replace in plan - " + sessionToReplaceObject.id);
+                                                planSessions[i].set("session", sessionToReplaceObject);
+                                                console.log("#### Session added to plan");
+                                            }
 
-							planSessions[i].set("session",sessionToReplaceObject);
-							console.log("#### Session added to plan");
-						}
+                                            Parse.Object.saveAll(planSessions, {
+                                                useMasterKey: true,
+                                                success: function(list) {
+                                                    console.log("#### planSessions Saved");
+                                                    //response.success('success');
 
-						Parse.Object.saveAll(planSessions, {
-							success: function(list) {
-								console.log("#### planSessions Saved");
-								response.success('success');
-							},
-							error: function(error) {
-								console.log("wasnt able to save new Sessions to PlanSessionRelation Table because  " + error.code);
-								response.error('wasnt able to save new Sessions to PlanSessionRelation Table');
-							}
-						});
-					}else{
-						response.success('No plans to update');
-					}
-                                      },
+
+                                                    console.log("#### Start alert query");
+                                                    var alertQuery = new Parse.Query("Alert");
+                                                    alertQuery.containedIn("session", results);
+                                                    alertQuery.include("session");
+                                                    alertQuery.limit(1000);
+                                                    alertQuery.find({
+                                                        useMasterKey: true,
+                                                        success: function(alerts) {
+                                                            if (alerts != null && alerts.length > 0) {
+                                                                for (var i = 0; i < results.length; i++) {
+                                                                    var newSessionForAlert = newRecurringSessionsArray[i];
+                                                                    var editedSessionObjectId = results[i].id;
+                                                                    console.log("#### Add Element to Dictionary - " + editedSessionObjectId);
+                                                                    console.log("#### Title of new session - " + newSessionForAlert.get("title"));
+                                                                    console.log("#### Id of new session - " + newSessionForAlert.id);
+                                                                    dictNewAndEditedAlert[String(editedSessionObjectId)] = newSessionForAlert;
+                                                                }
+                                                                console.log("#### Succesfully created dictionary...");
+
+                                                                console.log("#### Alerts Array  " + alerts.length);
+                                                                for (var i = 0; i < alerts.length; i++) {
+                                                                    var sessionToBeReplaced = new Parse.Object({
+                                                                        id: alerts[i].get("session").id
+                                                                    });
+                                                                    var sessionToBeReplacedObjectId = sessionToBeReplaced.id;
+                                                                    console.log("#### Session ObjectId to be replaced in alert - " + sessionToBeReplacedObjectId);
+
+                                                                    var sessionToReplaceObject = dictNewAndEditedAlert[String(sessionToBeReplacedObjectId)];
+                                                                    console.log("#### Session ObjectId to replace in alert - " + sessionToReplaceObject.id);
+
+                                                                    alerts[i].set("session", sessionToReplaceObject);
+                                                                    alerts[i].set("notified", false);
+                                                                    console.log("#### Session added to plan");
+                                                                }
+
+                                                                Parse.Object.saveAll(alerts, {
+                                                                    useMasterKey: true,
+                                                                    success: function(list) {
+                                                                        console.log("#### alerts Saved");
+                                                                        response.success('success');
+                                                                    },
+                                                                    error: function(error) {
+                                                                        console.log("wasnt able to save Alert Objects Table because  " + error.code);
+                                                                        response.error('wasnt able to save Alert Objects Table');
+                                                                    }
+                                                                });
+                                                            } else {
+                                                                response.success('No alerts to update');
+                                                            }
+                                                        },
+                                                        error: function(error) {
+                                                            console.log("wasnt able to find Alert Objects Table because  " + error.code);
+                                                            response.error('wasnt able to find Alert Objects Table');
+                                                        }
+                                                    });
+                                                },
+                                                error: function(error) {
+                                                    console.log("wasnt able to save new Sessions to PlanSessionRelation Table because  " + error.code);
+                                                    response.error('wasnt able to save new Sessions to PlanSessionRelation Table');
+                                                }
+                                            });
+                                        } else {
+                                            //response.success('success');
+                                            console.log('No plans to update');
+
+
+                                            console.log("#### Start alert query");
+                                            var alertQuery = new Parse.Query("Alert");
+                                            alertQuery.containedIn("session", results);
+                                            alertQuery.include("session");
+                                            alertQuery.limit(1000);
+                                            alertQuery.find({
+                                                useMasterKey: true,
+                                                success: function(alerts) {
+                                                    if (alerts != null && alerts.length > 0) {
+                                                        for (var i = 0; i < results.length; i++) {
+                                                            var newSessionForAlert = newRecurringSessionsArray[i];
+                                                            var editedSessionObjectId = results[i].id;
+                                                            console.log("#### Add Element to Dictionary - " + editedSessionObjectId);
+                                                            console.log("#### Title of new session - " + newSessionForAlert.get("title"));
+                                                            console.log("#### Id of new session - " + newSessionForAlert.id);
+                                                            dictNewAndEditedAlert[String(editedSessionObjectId)] = newSessionForAlert;
+                                                        }
+                                                        console.log("#### Succesfully created dictionary...");
+
+                                                        console.log("#### Alerts Array  " + alerts.length);
+                                                        for (var i = 0; i < alerts.length; i++) {
+                                                            var sessionToBeReplaced = new Parse.Object({
+                                                                id: alerts[i].get("session").id
+                                                            });
+                                                            var sessionToBeReplacedObjectId = sessionToBeReplaced.id;
+                                                            console.log("#### Session ObjectId to be replaced in alert - " + sessionToBeReplacedObjectId);
+
+                                                            var sessionToReplaceObject = dictNewAndEditedAlert[String(sessionToBeReplacedObjectId)];
+                                                            console.log("#### Session ObjectId to replace in alert - " + sessionToReplaceObject.id);
+
+                                                            alerts[i].set("session", sessionToReplaceObject);
+                                                            alerts[i].set("notified", false);
+                                                            console.log("#### Session added to plan");
+                                                        }
+
+                                                        Parse.Object.saveAll(alerts, {
+                                                            useMasterKey: true,
+                                                            success: function(list) {
+                                                                console.log("#### alerts Saved");
+                                                                response.success('success');
+                                                            },
+                                                            error: function(error) {
+                                                                console.log("wasnt able to save Alert Objects Table because  " + error.code);
+                                                                response.error('wasnt able to save Alert Objects Table');
+                                                            }
+                                                        });
+                                                    } else {
+                                                        response.success('No alerts to update');
+                                                    }
+                                                },
+                                                error: function(error) {
+                                                    console.log("wasnt able to find Alert Objects Table because  " + error.code);
+                                                    response.error('wasnt able to find Alert Objects Table');
+                                                }
+                                            });
+                                        }
+                                    },
                                     error: function(error) {
-                                      console.log("wasnt able to find PlanSessionRelation Table because  " + error.code);
-                                      response.error('wasnt able to find PlanSessionRelation Table');
+                                        console.log("wasnt able to find PlanSessionRelation Table because  " + error.code);
+                                        response.error('wasnt able to find PlanSessionRelation Table');
                                     }
                                 });
                             },
@@ -387,15 +782,14 @@ Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
                         response.error('Wasnt able to save New Recurring Sessions');
                     }
                 });
-            }else{
-				console.log("#### NO New Recurring Sessions to Re-Occure");
-				response.success('success');
-			}
+            } else {
+                console.log("#### NO New Recurring Sessions to Re-Occure");
+                response.success('success');
+            }
         },
         error: function() {
             response.error('Wasnt able to find Recurring Sessions');
-        },
-        useMasterKey: true
+        }
     });
 
     Date.isLeapYear = function(year) {
@@ -427,6 +821,7 @@ Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
 Parse.Cloud.define("sendEmail", function(request, response) {
 
     console.log("sendEmail " + new Date());
+    
     var mailTag = request.params.tag; //tag of email if needed (fro unsubscribers)
 
     var emailType = request.params.emailType;
@@ -457,6 +852,11 @@ Parse.Cloud.define("sendEmail", function(request, response) {
     var fromString = fromName + " <" + fromEmail + ">";
     var fromStudentString = fromName + " <" + studentEmail + ">";
     var toString = toName + " <" + toEmail + ">"
+    
+    if((toEmail == null && studentEmail == null) || (toEmail.length == 0  && studentEmail.length == 0)){
+        console.log("#### To Email is missing...");
+        response.error("To Email is missing...");
+    }
 
     switch (emailType) {
         //Invite Friend
@@ -678,22 +1078,24 @@ Parse.Cloud.define("sendEmail", function(request, response) {
                 subject: emailSubject,
                 html: emailBody
             };
-	    var query = new Parse.Query(Parse.User);
-		query.get(toId, {
-		    success: function (user) {
-			user.save(null, {
-			    success: function (savedUserObject) {
-            			console.log("#### Email:Sending message to user and updating user");
-			    },
-			    error: function(error) {
-				console.log('Failed to save user: ' + error.message);
-			    }
-			});
-		    },
-		    error: function (error) {
-			console.log(error);
-		    }
-		});
+            var query = new Parse.Query(Parse.User);
+            query.get(toId, {
+                useMasterKey: true,
+                success: function(user) {
+                    user.save(null, {
+                        useMasterKey: true,
+                        success: function(savedUserObject) {
+                            console.log("#### Email:Sending message to user and updating user");
+                        },
+                        error: function(error) {
+                            console.log('Failed to save user: ' + error.message);
+                        }
+                    });
+                },
+                error: function(error) {
+                    console.log(error);
+                }
+            });
             console.log("#### Email: User had no interaction with Medidate for over a week");
             break;
         default:
@@ -709,15 +1111,13 @@ Parse.Cloud.define("sendEmail", function(request, response) {
     simpleMailgunAdapter.messages().send(data, function(error, body) {
         if (error) {
             console.log("got an error in sendEmail: " + error);
-            response.error(err);
+            response.error(error);
         } else {
             console.log("email sent to " + toEmail + " " + new Date());
             response.success("Email sent!");
         }
     });
 });
-
-
 
 Parse.Cloud.define("userJoinedFromSiteMail", function(request, response) {
 
@@ -760,7 +1160,7 @@ Parse.Cloud.define("userJoinedFromSiteMail", function(request, response) {
 });
 
 Parse.Cloud.define('saveQualificationsToIndex', function(request, response) {
-    Parse.Cloud.useMasterKey();
+    //     Parse.Cloud.useMasterKey();
     console.log("saveQualificationsToIndex");
 
     var qualifications = ['', 'Practitioner', 'Instructor', 'Teacher', 'Master', 'Studio'];
@@ -780,6 +1180,7 @@ Parse.Cloud.define('saveQualificationsToIndex', function(request, response) {
                 }
             }
             Parse.Object.saveAll(users, {
+                useMasterKey: true,
                 success: function(list) {
                     console.log("Saved all users and qualifications - " + users.length);
                 },
@@ -792,12 +1193,12 @@ Parse.Cloud.define('saveQualificationsToIndex', function(request, response) {
 
         error: function(error) {
             response.error(error);
-        }
+        },
     });
 });
 
 Parse.Cloud.define('saveGenderToIndex', function(request, response) {
-    Parse.Cloud.useMasterKey();
+    //     Parse.Cloud.useMasterKey();
     console.log("saveGenderToIndex");
 
     var genders = ['Male', 'Female'];
@@ -817,6 +1218,7 @@ Parse.Cloud.define('saveGenderToIndex', function(request, response) {
                 }
             }
             Parse.Object.saveAll(users, {
+                useMasterKey: true,
                 success: function(list) {
                     console.log("Saved all users and genders - " + users.length);
                 },
@@ -829,7 +1231,7 @@ Parse.Cloud.define('saveGenderToIndex', function(request, response) {
 
         error: function(error) {
             response.error(error);
-        }
+        },
     });
 });
 
@@ -847,13 +1249,13 @@ Parse.Cloud.define('getFullUsersFromIds', function(request, response) {
         console.log("#### User Id Before Filtering " + users[i]);
     }
     userQuery.find({
-	useMasterKey: true,//This is for the new version
+        useMasterKey: true, //This is for the new version
         success: function(users) {
             console.log("Found..." + users.length);
-	    var emailsArray = []; 
+            var emailsArray = [];
             for (var i = 0; i < users.length; i++) {
-		emailsArray[i] = users[i].get("email");
-	    }
+                emailsArray[i] = users[i].get("email");
+            }
             response.success(users);
             //response.success(emailsArray);
         },
@@ -863,6 +1265,31 @@ Parse.Cloud.define('getFullUsersFromIds', function(request, response) {
         }
     });
 });
+
+Parse.Cloud.define('getFullUserInstallationsFromIds', function(request, response) {
+//     Parse.Cloud.useMasterKey();
+
+    var params = request.params;
+    var users = params.userIds; //ids of relevant users
+
+    var query = new Parse.Query(Parse.Installation);
+    query.containedIn("user", users);
+    query.descending('updatedAt')
+    query.find({
+        useMasterKey: true, //This is for the new version
+        success: function(results) {
+            for (var i = 0; i < results.length; i++) {
+                console.log("iterating over Installations");
+            }
+            console.log("Finished iterating over Installations");
+            response.success(results);
+        },
+        error: function(error) {
+            response.error(error);
+        }
+    });
+});
+
 
 // Parse.Cloud.define('createAndAttachStudioToUsers', function(request, response) {
 //     var params = request.params;
