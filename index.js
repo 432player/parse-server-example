@@ -26,14 +26,14 @@ var api = new ParseServer({
   databaseURI: databaseUri || 'mongodb://localhost:27017/dev',
   cloud: __dirname + '/cloud/main.js',
   appId: process.env.APP_ID || 'myAppId',
-  appName: 'Medidate Sandbox',
+  appName: 'Medidate Platform',
   masterKey: process.env.MASTER_KEY || '', //Add your master key here. Keep it secret!
   serverURL: process.env.SERVER_URL || process.env.ALT_SERVER_URL,  // Don't forget to change to https if needed
   publicServerURL: process.env.PUBLIC_SERVER_URL || process.env.ALT_PUBLIC_SERVER_URL,
   liveQuery: {
     classNames: ["Message"] // List of classes to support for query subscriptions
   },
-  verifyUserEmails: true,
+  verifyUserEmails: false,
   emailAdapter: {
       module: 'parse-server-simple-mailgun-adapter',
       options: {
