@@ -515,6 +515,7 @@ Parse.Cloud.define('refreshRecurringSessions', function(request, response) {
     var pushQuery = new Parse.Query("MSession");
     pushQuery.lessThanOrEqualTo("date", then);
     pushQuery.notContainedIn("occurrence", excludeMinusOccurences);
+    pushQuery.exists("occurrence");
     pushQuery.limit(1000);
     pushQuery.find({
         useMasterKey: true,
